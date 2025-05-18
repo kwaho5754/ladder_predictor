@@ -6,14 +6,14 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# 블럭 코드 생성 (앞/뒤 변환용)
+# 블럭 코드 생성
 def convert(entry):
     start = 'L' if entry['start_point'] == 'LEFT' else 'R'
     count = str(entry['line_count'])
     oe = 'E' if entry['odd_even'] == 'EVEN' else 'O'
     return f"{start}{count}{oe}"
 
-# 블럭 이름을 한글로 변환
+# 한글 변환
 def to_korean(block_code):
     if block_code == "❌ 없음":
         return "❌ 없음"
@@ -22,7 +22,7 @@ def to_korean(block_code):
     oe = "짝" if block_code[2] == "E" else "홀"
     return f"{start}{count}{oe}"
 
-# 뒤 기준 예측 함수 (2~6줄 기준)
+# 완전한 뒤 기준 예측
 def predict_backward(data):
     recent = data[-288:]
     total = len(recent)
@@ -34,9 +34,13 @@ def predict_backward(data):
         recent_block = ''.join([convert(entry)[-2:] for entry in recent[-size:]])
         for i in range(total - size):
             past_block = ''.join([convert(entry)[-2:] for entry in recent[i:i + size]])
-            if recent_block == past_block and i > 0:
-                result = convert(recent[i - 1])
-                predictions.append(result)
+            if recent_block == past_block:
+                # 뒤 기준: 블럭 다음 줄(i + size)이 존재하면 예측값으로 사용
+                if i + size < total:
+                    result = convert(recent[i + size])
+                    predictions.append(result)
+                else:
+                    predictions.append("❌ 없음")
                 break
         else:
             predictions.append("❌ 없음")
@@ -54,8 +58,7 @@ def predict():
             return jsonify({"error": "Invalid data format"})
 
         predictions = predict_backward(raw_data)
-        # 진행중인 회차 그대로 사용 (마지막 회차 그대로)
-        round_number = int(raw_data[-1]["date_round"])
+        round_number = int(raw_data[-1]["date_round"]) + 1  # 예측 회차는 다음 회차
 
         return jsonify({
             "예측회차": round_number,
