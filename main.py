@@ -6,51 +6,43 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# 🔧 블럭 문자열 변환 함수 (예: 좌4짝 → L4E)
+# 블럭 코드 생성 (앞/뒤 변환용)
 def convert(entry):
     start = 'L' if entry['start_point'] == 'LEFT' else 'R'
     count = str(entry['line_count'])
     oe = 'E' if entry['odd_even'] == 'EVEN' else 'O'
     return f"{start}{count}{oe}"
 
-# 🔧 블럭 문자열 → 한글 변환 함수
+# 블럭 이름을 한글로 변환
 def to_korean(block_code):
     if block_code == "❌ 없음":
         return "❌ 없음"
     start = "좌" if block_code[0] == "L" else "우"
     count = block_code[1]
-    oe = "짩" if block_code[2] == "E" else "혹"
+    oe = "짝" if block_code[2] == "E" else "홀"
     return f"{start}{count}{oe}"
 
-# 🔍 뒤 기준 예측 함수
+# 뒤 기준 예측 함수 (2~6줄 기준)
 def predict_backward(data):
     recent = data[-288:]
     total = len(recent)
     predictions = []
 
-    print(f"[디버그] 총 줄 수: {total}")
-
     for size in range(2, 7):
         if total <= size:
             continue
-        # 최근 블럭을 뒤 기준으로 생성 (뒷글자 기준)
         recent_block = ''.join([convert(entry)[-2:] for entry in recent[-size:]])
-        print(f"[디버그] 최근 블럭({size}줄): {recent_block}")
-
         for i in range(total - size):
             past_block = ''.join([convert(entry)[-2:] for entry in recent[i:i + size]])
             if recent_block == past_block and i > 0:
                 result = convert(recent[i - 1])
                 predictions.append(result)
-                print(f"[매칭] 블럭({size}줄) 일치 → 예측값: {result}")
                 break
         else:
             predictions.append("❌ 없음")
-            print(f"[미매칭] 블럭({size}줄) → 예측값 없음")
 
     return predictions[:5]
 
-# 📡 API
 @app.route("/predict", methods=["GET"])
 def predict():
     try:
@@ -62,7 +54,8 @@ def predict():
             return jsonify({"error": "Invalid data format"})
 
         predictions = predict_backward(raw_data)
-        round_number = int(raw_data[-1]["date_round"]) + 1
+        # 진행중인 회차 그대로 사용 (마지막 회차 그대로)
+        round_number = int(raw_data[-1]["date_round"])
 
         return jsonify({
             "예측회차": round_number,
@@ -72,7 +65,6 @@ def predict():
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# 🟢 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
