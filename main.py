@@ -1,57 +1,78 @@
-from flask import Flask, render_template_string
+from flask import Flask, jsonify
+from flask_cors import CORS
 import requests
+import os
 
 app = Flask(__name__)
+CORS(app)
 
-URL = "https://ntry.com/data/json/games/power_ladder/recent_result.json"
+# 🔧 블럭 문자열 변환 함수 (예: 좌4짝 → L4E)
+def convert(entry):
+    start = 'L' if entry['start_point'] == 'LEFT' else 'R'
+    count = str(entry['line_count'])
+    oe = 'E' if entry['odd_even'] == 'EVEN' else 'O'
+    return f"{start}{count}{oe}"
 
-def fetch_latest_data():
-    try:
-        res = requests.get(URL)
-        res.encoding = 'utf-8'
-        data = res.json()
-        rows = data['rows']
-        return [row['result'] for row in rows][-288:]  # 최근 288줄
-    except Exception as e:
-        print("Error fetching data:", e)
-        return []
+# 🔧 블럭 문자열 → 한글 변환 함수
+def to_korean(block_code):
+    if block_code == "❌ 없음":
+        return "❌ 없음"
+    start = "좌" if block_code[0] == "L" else "우"
+    count = block_code[1]
+    oe = "짩" if block_code[2] == "E" else "혹"
+    return f"{start}{count}{oe}"
 
-def make_back_block(lines):
-    return ''.join([line[-2:] for line in lines])
-
-def get_back_predictions(data):
+# 🔍 뒤 기준 예측 함수
+def predict_backward(data):
+    recent = data[-288:]
+    total = len(recent)
     predictions = []
+
+    print(f"[디버그] 총 줄 수: {total}")
+
     for size in range(2, 7):
-        if len(data) < size + 1:
+        if total <= size:
             continue
-        target_block = make_back_block(data[-size:])
-        for i in range(len(data) - size):
-            block = make_back_block(data[i:i+size])
-            if block == target_block:
-                pred = data[i - 1] if i - 1 >= 0 else '❌ 없음'
-                predictions.append(pred)
+        # 최근 블럭을 뒤 기준으로 생성 (뒷글자 기준)
+        recent_block = ''.join([convert(entry)[-2:] for entry in recent[-size:]])
+        print(f"[디버그] 최근 블럭({size}줄): {recent_block}")
+
+        for i in range(total - size):
+            past_block = ''.join([convert(entry)[-2:] for entry in recent[i:i + size]])
+            if recent_block == past_block and i > 0:
+                result = convert(recent[i - 1])
+                predictions.append(result)
+                print(f"[매칭] 블럭({size}줄) 일치 → 예측값: {result}")
                 break
-        if len(predictions) >= 5:
-            break
-    while len(predictions) < 5:
-        predictions.append('❌ 없음')
-    return predictions
+        else:
+            predictions.append("❌ 없음")
+            print(f"[미매칭] 블럭({size}줄) → 예측값 없음")
 
-@app.route('/predict')
+    return predictions[:5]
+
+# 📡 API
+@app.route("/predict", methods=["GET"])
 def predict():
-    data = fetch_latest_data()
-    if not data:
-        return "데이터 불러오기 실패"
-    back_preds = get_back_predictions(data)
-    html = """
-    <h2>사다리 예측 시스템 - 뒤 기준 (역방향)</h2>
-    <ul>
-    {% for i, pred in enumerate(preds) %}
-        <li>Top {{ i+1 }} : {{ pred }}</li>
-    {% endfor %}
-    </ul>
-    """
-    return render_template_string(html, preds=back_preds)
+    try:
+        url = "https://ntry.com/data/json/games/power_ladder/recent_result.json"
+        response = requests.get(url)
+        raw_data = response.json()
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+        if not isinstance(raw_data, list):
+            return jsonify({"error": "Invalid data format"})
+
+        predictions = predict_backward(raw_data)
+        round_number = int(raw_data[-1]["date_round"]) + 1
+
+        return jsonify({
+            "예측회차": round_number,
+            "뒤기준 예측값": [to_korean(p) for p in predictions]
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+# 🟢 실행
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
