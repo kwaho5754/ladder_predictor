@@ -58,7 +58,7 @@ def predict():
             return jsonify({"error": "Invalid data format"})
 
         predictions = predict_backward(raw_data)
-        round_number = int(raw_data[-1]["date_round"]) + 1  # 예측 회차는 다음 회차
+        round_number = int(raw_data[-1]["date_round"]) 
 
         return jsonify({
             "예측회차": round_number,
