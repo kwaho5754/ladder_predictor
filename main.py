@@ -2,50 +2,57 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 import os
+from collections import Counter
 
 app = Flask(__name__)
 CORS(app)
 
-# 블럭 코드 생성
+# 블럭을 한글 문자열로 변환
 def convert(entry):
-    start = 'L' if entry['start_point'] == 'LEFT' else 'R'
+    side = '좌' if entry['start_point'] == 'LEFT' else '우'
     count = str(entry['line_count'])
-    oe = 'E' if entry['odd_even'] == 'EVEN' else 'O'
-    return f"{start}{count}{oe}"
+    oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
+    return f"{side}{count}{oe}"
 
-# 한글 변환
-def to_korean(block_code):
-    if block_code == "❌ 없음":
-        return "❌ 없음"
-    start = "좌" if block_code[0] == "L" else "우"
-    count = block_code[1]
-    oe = "짝" if block_code[2] == "E" else "홀"
-    return f"{start}{count}{oe}"
+# 블럭 문자열 대칭 변환
+def mirror(block):
+    result = []
+    for b in block.split('>'):
+        side = '우' if b[0] == '좌' else '좌'
+        oe = '짝' if b[2] == '홀' else '홀'
+        result.append(f"{side}{b[1]}{oe}")
+    return '>'.join(result)
 
-# 완전한 뒤 기준 예측
-def predict_backward(data):
-    recent = data[-288:]
-    total = len(recent)
+# 최근 블럭 리스트 생성 (2~5줄)
+def generate_blocks(data):
+    blocks = []
+    for size in range(2, 6):
+        if len(data) < size:
+            continue
+        block = '>'.join([convert(entry) for entry in data[-size:]])
+        blocks.append((size, block))
+    return blocks
+
+# 예측값 추출 함수 (블럭당 상단/하단 2개씩)
+def find_predictions(data, blocks):
+    total = len(data)
     predictions = []
 
-    for size in range(2, 7):
-        if total <= size:
-            continue
-        recent_block = ''.join([convert(entry)[-2:] for entry in recent[-size:]])
-        for i in range(total - size):
-            past_block = ''.join([convert(entry)[-2:] for entry in recent[i:i + size]])
-            if recent_block == past_block:
-                # 뒤 기준: 블럭 다음 줄(i + size)이 존재하면 예측값으로 사용
-                if i + size < total:
-                    result = convert(recent[i + size])
-                    predictions.append(result)
-                else:
-                    predictions.append("❌ 없음")
-                break
-        else:
-            predictions.append("❌ 없음")
+    for size, block in blocks:
+        for use_block in [block, mirror(block)]:
+            for i in range(total - size):
+                compare = '>'.join([convert(entry) for entry in data[i:i+size]])
+                if compare == use_block:
+                    if i > 0:
+                        predictions.append(convert(data[i - 1]))  # 상단
+                    if i + size < total:
+                        predictions.append(convert(data[i + size]))  # 하단
+                    break
+            else:
+                predictions.append("❌ 없음")  # 상단 없음
+                predictions.append("❌ 없음")  # 하단 없음
 
-    return predictions[:5]
+    return predictions
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -57,12 +64,17 @@ def predict():
         if not isinstance(raw_data, list):
             return jsonify({"error": "Invalid data format"})
 
-        predictions = predict_backward(raw_data)
-        round_number = int(raw_data[-1]["date_round"]) 
+        recent = raw_data[-288:]
+        blocks = generate_blocks(recent)
+        predictions = find_predictions(recent, blocks)
+
+        # 유효한 예측값만 필터링 후 최빈도 상위 3개 추출
+        filtered = [p for p in predictions if p != "❌ 없음"]
+        top3 = [item for item, _ in Counter(filtered).most_common(3)]
 
         return jsonify({
-            "예측회차": round_number,
-            "뒤기준 예측값": [to_korean(p) for p in predictions]
+            "예측회차": int(raw_data[-1]["date_round"]),
+            "Top3 예측값": top3
         })
 
     except Exception as e:
