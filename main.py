@@ -40,7 +40,7 @@ def find_predictions(data, blocks):
 
     for size, block in blocks:
         for use_block in [block, mirror(block)]:
-            for i in range(total - size):
+            for i in reversed(range(total - size)):  # ✅ 수정됨: 최근 → 과거 방향
                 compare = '>'.join([convert(entry) for entry in data[i:i+size]])
                 if compare == use_block:
                     if i > 0:
