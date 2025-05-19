@@ -33,26 +33,28 @@ def generate_blocks(data):
         blocks.append((size, block))
     return blocks
 
-# 예측값 추출 함수 (블럭당 상단/하단 2개씩)
+# 예측값 추출 함수 (블럭당 전체 매칭 스캔 → 상단/하단 모두 수집 → 빈도 분석)
 def find_predictions(data, blocks):
     total = len(data)
     predictions = []
 
     for size, block in blocks:
         for use_block in [block, mirror(block)]:
-            for i in reversed(range(total - size)):  # ✅ 수정됨: 최근 → 과거 방향
+            for i in reversed(range(total - size)):  # 최근 → 과거
                 compare = '>'.join([convert(entry) for entry in data[i:i+size]])
                 if compare == use_block:
                     if i > 0:
                         predictions.append(convert(data[i - 1]))  # 상단
                     if i + size < total:
                         predictions.append(convert(data[i + size]))  # 하단
-                    break
-            else:
-                predictions.append("❌ 없음")  # 상단 없음
-                predictions.append("❌ 없음")  # 하단 없음
 
-    return predictions
+    if not predictions:
+        return ["❌ 없음", "❌ 없음", "❌ 없음"]
+
+    top3 = [item for item, _ in Counter(predictions).most_common(3)]
+    while len(top3) < 3:
+        top3.append("❌ 없음")
+    return top3
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -66,11 +68,7 @@ def predict():
 
         recent = raw_data[-288:]
         blocks = generate_blocks(recent)
-        predictions = find_predictions(recent, blocks)
-
-        # 유효한 예측값만 필터링 후 최빈도 상위 3개 추출
-        filtered = [p for p in predictions if p != "❌ 없음"]
-        top3 = [item for item, _ in Counter(filtered).most_common(3)]
+        top3 = find_predictions(recent, blocks)
 
         return jsonify({
             "예측회차": int(raw_data[-1]["date_round"]),
