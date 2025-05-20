@@ -33,7 +33,7 @@ def generate_blocks(data):
         blocks.append((size, block))
     return blocks
 
-# 예측값 추출 함수 (블럭당 전체 매칭 스캔 → 상단/하단 모두 수집 → 빈도 분석)
+# 예측값 추출 함수
 def find_predictions(data, blocks):
     total = len(data)
     predictions = []
@@ -49,11 +49,15 @@ def find_predictions(data, blocks):
                         predictions.append(convert(data[i + size]))  # 하단
 
     if not predictions:
-        return ["❌ 없음", "❌ 없음", "❌ 없음"]
+        return [{"value": "❌ 없음", "count": 0} for _ in range(3)]
 
-    top3 = [item for item, _ in Counter(predictions).most_common(3)]
+    counter = Counter(predictions)
+    top3_raw = counter.most_common(3)
+    top3 = [{"value": item, "count": count} for item, count in top3_raw]
+
     while len(top3) < 3:
-        top3.append("❌ 없음")
+        top3.append({"value": "❌ 없음", "count": 0})
+
     return top3
 
 @app.route("/predict", methods=["GET"])
