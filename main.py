@@ -13,9 +13,12 @@ def convert(entry):
     oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
     return f"{side}{count}{oe}"
 
-def get_mirror_name(name):
-    table = str.maketrans("좌우", "우좌")
-    return name.translate(table)
+# 완전 대칭 함수 (좌↔우, 짝↔홀)
+def get_full_mirror_name(name):
+    side = '우' if '좌' in name else '좌'
+    count = name[1]  # '3' or '4'
+    oe = '홀' if '짝' in name else '짝'
+    return f"{side}{count}{oe}"
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -37,7 +40,7 @@ def predict():
             block = [convert(entry) for entry in data[-size:]]
             block_str = '>'.join(block)
 
-            mirror_block = [get_mirror_name(b) for b in block]
+            mirror_block = [get_full_mirror_name(b) for b in block]
             mirror_block_str = '>'.join(mirror_block)
 
             for pattern in [block_str, mirror_block_str]:
