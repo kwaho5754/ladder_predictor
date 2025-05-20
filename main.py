@@ -7,58 +7,15 @@ from collections import Counter
 app = Flask(__name__)
 CORS(app)
 
-# 블럭을 한글 문자열로 변환
 def convert(entry):
     side = '좌' if entry['start_point'] == 'LEFT' else '우'
     count = str(entry['line_count'])
     oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
     return f"{side}{count}{oe}"
 
-# 블럭 문자열 대칭 변환
-def mirror(block):
-    result = []
-    for b in block.split('>'):
-        side = '우' if b[0] == '좌' else '좌'
-        oe = '짝' if b[2] == '홀' else '홀'
-        result.append(f"{side}{b[1]}{oe}")
-    return '>'.join(result)
-
-# 최근 블럭 리스트 생성 (2~5줄)
-def generate_blocks(data):
-    blocks = []
-    for size in range(2, 6):
-        if len(data) < size:
-            continue
-        block = '>'.join([convert(entry) for entry in data[-size:]])
-        blocks.append((size, block))
-    return blocks
-
-# 예측값 추출 함수
-def find_predictions(data, blocks):
-    total = len(data)
-    predictions = []
-
-    for size, block in blocks:
-        for use_block in [block, mirror(block)]:
-            for i in reversed(range(total - size)):  # 최근 → 과거
-                compare = '>'.join([convert(entry) for entry in data[i:i+size]])
-                if compare == use_block:
-                    if i > 0:
-                        predictions.append(convert(data[i - 1]))  # 상단
-                    if i + size < total:
-                        predictions.append(convert(data[i + size]))  # 하단
-
-    if not predictions:
-        return [{"value": "❌ 없음", "count": 0} for _ in range(3)]
-
-    counter = Counter(predictions)
-    top3_raw = counter.most_common(3)
-    top3 = [{"value": item, "count": count} for item, count in top3_raw]
-
-    while len(top3) < 3:
-        top3.append({"value": "❌ 없음", "count": 0})
-
-    return top3
+def get_mirror_name(name):
+    table = str.maketrans("좌우", "우좌")
+    return name.translate(table)
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -70,9 +27,42 @@ def predict():
         if not isinstance(raw_data, list):
             return jsonify({"error": "Invalid data format"})
 
-        recent = raw_data[-288:]
-        blocks = generate_blocks(recent)
-        top3 = find_predictions(recent, blocks)
+        data = raw_data[-288:]
+        predictions = []
+
+        for size in range(2, 6):
+            if len(data) < size:
+                continue
+
+            block = [convert(entry) for entry in data[-size:]]
+            block_str = '>'.join(block)
+
+            mirror_block = [get_mirror_name(b) for b in block]
+            mirror_block_str = '>'.join(mirror_block)
+
+            for pattern in [block_str, mirror_block_str]:
+                for i in reversed(range(len(data) - size)):
+                    past_block = [convert(entry) for entry in data[i:i + size]]
+                    past_block_str = '>'.join(past_block)
+
+                    if pattern == past_block_str:
+                        if i > 0:
+                            predictions.append(convert(data[i - 1]))  # 상단
+                        if i + size < len(data):
+                            predictions.append(convert(data[i + size]))  # 하단
+
+        if not predictions:
+            return jsonify({
+                "예측회차": int(raw_data[-1]["date_round"]),
+                "Top3 예측값": [{"value": "❌ 없음", "count": 0} for _ in range(3)]
+            })
+
+        counter = Counter(predictions)
+        top3_raw = counter.most_common(3)
+        top3 = [{"value": item, "count": count} for item, count in top3_raw]
+
+        while len(top3) < 3:
+            top3.append({"value": "❌ 없음", "count": 0})
 
         return jsonify({
             "예측회차": int(raw_data[-1]["date_round"]),
