@@ -13,12 +13,39 @@ def convert(entry):
     oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
     return f"{side}{count}{oe}"
 
-# 완전 대칭 함수 (좌↔우, 짝↔홀)
 def get_full_mirror_name(name):
     side = '우' if '좌' in name else '좌'
-    count = name[1]  # '3' or '4'
+    count = name[1]
     oe = '홀' if '짝' in name else '짝'
     return f"{side}{count}{oe}"
+
+def extract_predictions(data, transform_func=None):
+    predictions = []
+    for size in range(2, 6):
+        if len(data) < size:
+            continue
+
+        block = [convert(entry) for entry in data[-size:]]
+        if transform_func:
+            block = [transform_func(b) for b in block]
+        pattern = '>'.join(block)
+
+        for i in reversed(range(len(data) - size)):
+            past_block = [convert(entry) for entry in data[i:i + size]]
+            if pattern == '>'.join(past_block):
+                if i > 0:
+                    predictions.append(convert(data[i - 1]))
+                if i + size < len(data):
+                    predictions.append(convert(data[i + size]))
+    return predictions
+
+def top3_result(predictions):
+    counter = Counter(predictions)
+    top3_raw = counter.most_common(3)
+    result = [{"value": val, "count": cnt} for val, cnt in top3_raw]
+    while len(result) < 3:
+        result.append({"value": "❌ 없음", "count": 0})
+    return result
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -31,45 +58,15 @@ def predict():
             return jsonify({"error": "Invalid data format"})
 
         data = raw_data[-288:]
-        predictions = []
+        round_num = int(raw_data[-1]["date_round"])
 
-        for size in range(2, 6):
-            if len(data) < size:
-                continue
-
-            block = [convert(entry) for entry in data[-size:]]
-            block_str = '>'.join(block)
-
-            mirror_block = [get_full_mirror_name(b) for b in block]
-            mirror_block_str = '>'.join(mirror_block)
-
-            for pattern in [block_str, mirror_block_str]:
-                for i in reversed(range(len(data) - size)):
-                    past_block = [convert(entry) for entry in data[i:i + size]]
-                    past_block_str = '>'.join(past_block)
-
-                    if pattern == past_block_str:
-                        if i > 0:
-                            predictions.append(convert(data[i - 1]))  # 상단
-                        if i + size < len(data):
-                            predictions.append(convert(data[i + size]))  # 하단
-
-        if not predictions:
-            return jsonify({
-                "예측회차": int(raw_data[-1]["date_round"]),
-                "Top3 예측값": [{"value": "❌ 없음", "count": 0} for _ in range(3)]
-            })
-
-        counter = Counter(predictions)
-        top3_raw = counter.most_common(3)
-        top3 = [{"value": item, "count": count} for item, count in top3_raw]
-
-        while len(top3) < 3:
-            top3.append({"value": "❌ 없음", "count": 0})
+        original_preds = extract_predictions(data)
+        mirror_preds = extract_predictions(data, transform_func=get_full_mirror_name)
 
         return jsonify({
-            "예측회차": int(raw_data[-1]["date_round"]),
-            "Top3 예측값": top3
+            "예측회차": round_num,
+            "원본 Top3": top3_result(original_preds),
+            "대칭 Top3": top3_result(mirror_preds)
         })
 
     except Exception as e:
