@@ -1,11 +1,16 @@
+# ⬇️ main.py — 역방향 흐름 점수제 (Top3 형식 출력)
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 import os
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 app = Flask(__name__)
 CORS(app)
+
+def parse_block(block):
+    return block[0], block[1], block[2]  # (시작, 줄수, 홀짝)
 
 def convert(entry):
     side = '좌' if entry['start_point'] == 'LEFT' else '우'
@@ -13,95 +18,88 @@ def convert(entry):
     oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
     return f"{side}{count}{oe}"
 
-def split_components(name):
-    return name[0], name[1], name[2]
+def flip_start(s):
+    return '우' if s == '좌' else '좌'
 
-def calculate_score(value, recent_list, total_list, block_sequence):
-    score = 0.0
-    reasons = []
+def flip_oe(o):
+    return '짝' if o == '홀' else '홀'
 
-    recent_count = recent_list.count(value)
-    total_count = total_list.count(value)
-    freq_score = recent_count * 1.0 + (total_count / 10.0) * 0.5
-    score += freq_score
-    reasons.append(f"빈도 점수: {freq_score}점 (최근 {recent_count}회, 전체 {total_count}회)")
+def generate_variants_for_block(block):
+    variants = {"원본": block, "대칭시작": [], "대칭홀짝": [], "대칭둘다": []}
+    for b in block:
+        s, c, o = parse_block(b)
+        variants["대칭시작"].append(f"{flip_start(s)}{c}{o}")
+        variants["대칭홀짝"].append(f"{s}{c}{flip_oe(o)}")
+        variants["대칭둘다"].append(f"{flip_start(s)}{c}{flip_oe(o)}")
+    return variants
 
-    block_matches = 0
-    for i in range(len(block_sequence) - 4):
-        if block_sequence[i:i+3] == block_sequence[-3:]:
-            if i + 3 < len(block_sequence) and block_sequence[i+3] == value:
-                block_matches += 1
-    if block_matches > 0:
-        block_score = block_matches * 1.0
-        score += block_score
-        reasons.append(f"블럭 반복 보정: +{block_score}점 ({block_matches}회 적중)")
+def match_blocks(data, size):
+    reversed_data = list(reversed(data))
+    recent = [convert(d) for d in reversed_data[:size]]
+    variants = generate_variants_for_block(recent)
+    all_data = [convert(d) for d in reversed_data]
 
-    counter = Counter(recent_list)
-    if value in ['좌', '우']:
-        opp = '우' if value == '좌' else '좌'
-        if counter[opp] >= 16:
-            score += 1.5
-            reasons.append(f"밸런스 보정: {opp} 편향 → {value} +1.5점")
-    if value in ['홀', '짝']:
-        opp = '짝' if value == '홀' else '홀'
-        if counter[opp] >= 16:
-            score += 1.5
-            reasons.append(f"밸런스 보정: {opp} 편향 → {value} +1.5점")
+    scores = defaultdict(lambda: {"score": 0, "detail": defaultdict(int)})
 
-    max_streak = 0
-    current_streak = 0
-    for v in recent_list:
-        if v == value:
-            current_streak += 1
-            max_streak = max(max_streak, current_streak)
-        else:
-            current_streak = 0
-    if max_streak >= 5:
-        score -= 1.0
-        reasons.append(f"연속 반복 감점: {max_streak}회 연속 → -1.0점")
+    for i in range(len(all_data) - size):
+        past_block = all_data[i:i+size]
+        if past_block == variants['원본']:
+            target = reversed_data[i+size] if i + size < len(reversed_data) else None
+            if target:
+                val = convert(target)
+                scores[val]["score"] += 3
+                scores[val]["detail"]["원본반복"] += 1
+        if past_block == variants['대칭시작']:
+            target = reversed_data[i+size] if i + size < len(reversed_data) else None
+            if target:
+                val = convert(target)
+                scores[val]["score"] += 2
+                scores[val]["detail"]["시작대칭"] += 1
+        if past_block == variants['대칭홀짝']:
+            target = reversed_data[i+size] if i + size < len(reversed_data) else None
+            if target:
+                val = convert(target)
+                scores[val]["score"] += 2
+                scores[val]["detail"]["홀짝대칭"] += 1
+        if past_block == variants['대칭둘다']:
+            target = reversed_data[i+size] if i + size < len(reversed_data) else None
+            if target:
+                val = convert(target)
+                scores[val]["score"] += 1
+                scores[val]["detail"]["시작+홀짝대칭"] += 1
 
-    return {
-        "value": value,
-        "score": round(score, 2),
-        "recent": recent_count,
-        "total": total_count,
-        "reasons": reasons
-    }
+    return scores
 
-def predict_element(data, index):
-    # ✅ 최근에서 과거 순서로 그대로 사용 (가장 최신 20줄 = data[-20:])
-    recent = data[-20:]
-    recent_values = [split_components(convert(d))[index] for d in recent]
-    total_values = [split_components(convert(d))[index] for d in data]
-    block_sequence = [split_components(convert(d))[index] for d in data]
-
-    candidates = list(set(total_values))
-    scored = [calculate_score(v, recent_values, total_values, block_sequence) for v in candidates]
-    return max(scored, key=lambda x: x['score'])
-
-@app.route("/predict", methods=["GET"])
+@app.route("/predict")
 def predict():
     try:
         url = "https://ntry.com/data/json/games/power_ladder/recent_result.json"
-        response = requests.get(url)
-        raw_data = response.json()
+        raw = requests.get(url).json()
+        data = raw[-288:]
+        round_num = int(raw[-1]['date_round']) + 1
 
-        data = raw_data[-288:]
-        round_num = int(raw_data[-1]["date_round"]) + 1
+        all_scores = defaultdict(lambda: {"score": 0, "detail": defaultdict(int)})
+        for size in range(3, 8):  # 3~7줄 블럭
+            scores = match_blocks(data, size)
+            for key, val in scores.items():
+                all_scores[key]["score"] += val["score"]
+                for k, v in val["detail"].items():
+                    all_scores[key]["detail"][k] += v
 
-        result = {
-            "예측회차": round_num,
-            "예측값": {
-                "시작방향": predict_element(data, 0),
-                "줄수": predict_element(data, 1),
-                "홀짝": predict_element(data, 2)
-            }
-        }
-        return jsonify(result)
+        sorted_result = sorted(all_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+        top3 = []
+        for i in range(3):
+            if i < len(sorted_result):
+                name, info = sorted_result[i]
+                top3.append({"값": name, "점수": info["score"], "근거": dict(info["detail"])})
+            else:
+                top3.append({"값": "❌ 없음", "점수": 0, "근거": {}})
+
+        return jsonify({"예측회차": round_num, "Top3": top3})
 
     except Exception as e:
         return jsonify({"error": str(e)})
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=port)
