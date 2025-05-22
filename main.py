@@ -60,7 +60,7 @@ def predict():
             return jsonify({"error": "Invalid data format"})
 
         data = raw_data[-288:]
-        round_num = int(raw_data[-1]["date_round"])
+        round_num = int(raw_data[-1]["date_round"]) + 1
 
         original_score = weighted_prediction(data)
         mirror_score = weighted_prediction(data, transform_func=get_full_mirror_name)
