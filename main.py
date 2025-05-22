@@ -26,12 +26,12 @@ def weighted_prediction(data, transform_func=None):
     for size in range(2, 6):
         if len(data) < size:
             continue
-        block = [convert(entry) for entry in data[-size:]]
+        block = [convert(entry) for entry in data[:size]]
         if transform_func:
             block = [transform_func(b) for b in block]
         pattern = '>'.join(block)
 
-        for i in reversed(range(len(data) - size)):
+        for i in range(len(data) - size):
             past_block = [convert(entry) for entry in data[i:i + size]]
             if pattern == '>'.join(past_block):
                 if i > 0:
