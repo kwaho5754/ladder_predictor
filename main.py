@@ -2,7 +2,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 app = Flask(__name__)
 CORS(app)
@@ -13,41 +13,71 @@ def convert(entry):
     oe = '짝' if entry['odd_even'] == 'EVEN' else '홀'
     return f"{side}{count}{oe}"
 
-def get_full_mirror_name(name):
-    side = '우' if '좌' in name else '좌'
-    count = name[1]
-    oe = '홀' if '짝' in name else '짝'
-    return f"{side}{count}{oe}"
+def split_components(name):
+    return name[0], name[1], name[2]
 
-def weighted_prediction(data, transform_func=None):
-    weights = {2: 0.5, 3: 1.0, 4: 2.0, 5: 3.0}
-    scores = defaultdict(float)
+def calculate_score(value, recent_list, total_list, block_sequence):
+    score = 0.0
+    reasons = []
 
-    for size in range(2, 6):
-        if len(data) < size:
-            continue
-        block = [convert(entry) for entry in data[:size]]
-        if transform_func:
-            block = [transform_func(b) for b in block]
-        pattern = '>'.join(block)
+    recent_count = recent_list.count(value)
+    total_count = total_list.count(value)
+    freq_score = recent_count * 1.0 + (total_count / 10.0) * 0.5
+    score += freq_score
+    reasons.append(f"빈도 점수: {freq_score}점 (최근 {recent_count}회, 전체 {total_count}회)")
 
-        for i in range(len(data) - size):
-            past_block = [convert(entry) for entry in data[i:i + size]]
-            if pattern == '>'.join(past_block):
-                if i > 0:
-                    value = convert(data[i - 1])
-                    scores[value] += weights[size]
-                if i + size < len(data):
-                    value = convert(data[i + size])
-                    scores[value] += weights[size]
-    return scores
+    block_matches = 0
+    for i in range(len(block_sequence) - 4):
+        if block_sequence[i:i+3] == block_sequence[-3:]:
+            if i + 3 < len(block_sequence) and block_sequence[i+3] == value:
+                block_matches += 1
+    if block_matches > 0:
+        block_score = block_matches * 1.0
+        score += block_score
+        reasons.append(f"블럭 반복 보정: +{block_score}점 ({block_matches}회 적중)")
 
-def top3_weighted(scores):
-    sorted_items = sorted(scores.items(), key=lambda x: -x[1])
-    result = [{"value": val, "score": round(score, 2)} for val, score in sorted_items[:3]]
-    while len(result) < 3:
-        result.append({"value": "❌ 없음", "score": 0.0})
-    return result
+    counter = Counter(recent_list)
+    if value in ['좌', '우']:
+        opp = '우' if value == '좌' else '좌'
+        if counter[opp] >= 16:
+            score += 1.5
+            reasons.append(f"밸런스 보정: {opp} 편향 → {value} +1.5점")
+    if value in ['홀', '짝']:
+        opp = '짝' if value == '홀' else '홀'
+        if counter[opp] >= 16:
+            score += 1.5
+            reasons.append(f"밸런스 보정: {opp} 편향 → {value} +1.5점")
+
+    max_streak = 0
+    current_streak = 0
+    for v in recent_list:
+        if v == value:
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
+        else:
+            current_streak = 0
+    if max_streak >= 5:
+        score -= 1.0
+        reasons.append(f"연속 반복 감점: {max_streak}회 연속 → -1.0점")
+
+    return {
+        "value": value,
+        "score": round(score, 2),
+        "recent": recent_count,
+        "total": total_count,
+        "reasons": reasons
+    }
+
+def predict_element(data, index):
+    reversed_data = list(reversed(data))
+    recent = reversed_data[:20]
+    recent_values = [split_components(convert(d))[index] for d in recent]
+    total_values = [split_components(convert(d))[index] for d in reversed_data]
+    block_sequence = [split_components(convert(d))[index] for d in reversed_data]
+
+    candidates = list(set(total_values))
+    scored = [calculate_score(v, recent_values, total_values, block_sequence) for v in candidates]
+    return max(scored, key=lambda x: x['score'])
 
 @app.route("/predict", methods=["GET"])
 def predict():
@@ -56,20 +86,18 @@ def predict():
         response = requests.get(url)
         raw_data = response.json()
 
-        if not isinstance(raw_data, list):
-            return jsonify({"error": "Invalid data format"})
-
         data = raw_data[-288:]
         round_num = int(raw_data[-1]["date_round"]) + 1
 
-        original_score = weighted_prediction(data)
-        mirror_score = weighted_prediction(data, transform_func=get_full_mirror_name)
-
-        return jsonify({
+        result = {
             "예측회차": round_num,
-            "원본 Top3": top3_weighted(original_score),
-            "대칭 Top3": top3_weighted(mirror_score)
-        })
+            "예측값": {
+                "시작방향": predict_element(data, 0),
+                "줄수": predict_element(data, 1),
+                "홀짝": predict_element(data, 2)
+            }
+        }
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({"error": str(e)})
